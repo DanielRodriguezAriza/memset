@@ -28,11 +28,21 @@
 #define DRA_SECURE_CALL_WITH_ASSIGNMENT(v, f, ...) DRA_SECURE_CALL_WITH_ASSIGNMENT_INTERNAL(__LINE__, (v), DRA_SECURE_CALL_TYPEOF(&f), (&f), __VA_ARGS__)
 #define DRA_SECURE_CALL_WITH_ASSIGNMENT_TYPED(v, t, f, ...) DRA_SECURE_CALL_WITH_ASSIGNMENT_INTERNAL(__LINE__, (v), t, (&f), __VA_ARGS__)
 
+#if defined(__GNUC__) || defined(__clang__)
+    #define DRA_SAFE_CALL_BARRIER(p) do { __asm__ __volatile__("" ::"r"(p): "memory"); } while(0)
+#else
+    void safe_call_barrier_internal(void*) {}
+    typedef void (*safe_call_barrier_t)(void*);
+    volatile static safe_call_barrier_t safe_call_barrier_global = safe_call_barrier_internal;
+    #define DRA_SAFE_CALL_BARRIER(p) safe_call_barrier_global(p)
+#endif
+
 #ifndef DRA_SECURE_CALL_DO_NOT_ADD_PUBLIC_NAMES
 	#define secure_call(f, ...) DRA_SECURE_CALL(f, __VA_ARGS__)
 	#define secure_call_typed(t, f, ...) DRA_SECURE_CALL_TYPED(t, f, __VA_ARGS__)
     #define secure_call_with_assignment(v, f, ...) DRA_SECURE_CALL_WITH_ASSIGNMENT(v, f, __VA_ARGS__)
     #define secure_call_with_assignment_typed(v, t, f, ...) DRA_SECURE_CALL_WITH_ASSIGNMENT_TYPED(v, t, f, __VA_ARGS__)
+    #define safe_call_barrier(p) DRA_SAFE_CALL_BARRIER(p)
 #endif
 
 #endif
