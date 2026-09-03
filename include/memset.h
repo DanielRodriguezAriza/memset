@@ -6,6 +6,13 @@
 #endif
 
 #include <stddef.h>
+#ifndef DRA_MEMSET_FREESTANDING
+#include <string.h>
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 DRA_MEMSET_LINKAGE void MemorySet(void*,int,size_t);
 DRA_MEMSET_LINKAGE void MemorySetVolatile(void*,int,size_t);
@@ -28,8 +35,6 @@ DRA_MEMSET_LINKAGE void MemorySetVolatile(void *p, int c, size_t n)
 
 #else
 
-#include <string.h>
-
 typedef void *(*dra_memset_t)(void*,int,size_t);
 volatile static dra_memset_t dra_memset_function_pointer = memset;
 
@@ -47,5 +52,9 @@ static inline void MemorySetVolatile(void *p, int c, size_t n)
 
 DRA_MEMSET_LINKAGE void MemoryZero(void *p, size_t n) { MemorySet(p, 0, n); }
 DRA_MEMSET_LINKAGE void MemoryZeroVolatile(void *p, size_t n) { MemorySetVolatile(p, 0, n); }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
