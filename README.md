@@ -137,3 +137,5 @@ An alternative would be to use weak linkage, which would achieve the same effect
 ## Summary:
 For now, this is the best I could come up with without overthinking too much. The ``memset()`` implementation on most C standard library implementations across Linux, BSD, Windows, etc, are all pretty good, and far better than any naive loop with a volatile pointer to the data, so the objective of my implementation is to try to not miss out on the great performance of standard ``memset()`` when trying to perform a secure memset call.
 
+It is sad that we have to incurr in the performance cost of a function pointer dereference rather than performing a raw ``memset()`` function call, but the C and C++ languages do not have any ways to signal to the compiler that you want a certain call to happen always for whatever purposes. The compiler is just too darn smart for its own good!
+
