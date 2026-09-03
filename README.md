@@ -32,17 +32,44 @@ In short, the answer to any question you could have is either because I do not h
 
 As a quick TL;DR for a specific example, platform specific functionality such as ``SecureZeroMemory()`` from Windows is slower than their internal UCRT ``memset()`` implementation due to how it is internally implemented, so it is not worth it to add support for it when a single function pointer dereference is going to have a smaller overhead than using their slower non-optimizable secure memset variant.
 
-## WIN32 specific SecureZeroMemory support:
-There is probably no need to add WIN32 specific support, RtlSecureZeroMemory is
-actually slower than the default UCRT Windows implementation of memset, since
-under the hood, it just calls __stosb() if AMD64 support is available, otherwise,
-it performs a naive loop just like my freestanding implementation.
-Meanwhile, Windows' implementation of memset is quite optimized and has CPU detection,
-like most other platform C library implementations of memset in this day and age.
-This means that the volatile pointer trick is actually faster for larger buffers.
-It just has the cost of a single pointer to a function.
-Maybe with some buffer size heuristic, a decision to choose between the two could
-be made at runtime, but that's not worth it in my opinion.
+## WIN32 ZeroMemory and SecureZeroMemory support:
+There is probably no need to add WIN32 specific support. I would like to do so, since, surprisingly, this is actually the implementation that will give me the least issues and be the most stable out of all the platform specific stuff, but it still has some major issues that makes it not worth it.
+
+For starters, ``ZeroMemory()`` is just a wrapper macro around ``memset()``, so obviously it makes no sense to include a whole host of Windows specific headers, with all of their heavy machinery and global namespace pollution, just to include this fucking macro.
+
+Then we have ``SecureZeroMemory()``, which is just a macro that calls the internal function ``RtlSecureZeroMemory()``. This specific function is not that bad, but does its purpose, but again, it requires including a whole host of Windows specific headers, and most people would rather have that on a separate translation unit and wrap around it. The function lives in WinNT.h, but this header cannot be included on its own directly. It is an internal header expected to be included by a larger chain of include dependencies from Windows.h, so you will need even more polution of the global namespace just for the sake of getting a 5 line function to work, which is absolute bonkers.
+
+Not to mention, ``RtlSecureZeroMemory()`` is actually verifiably slower than the UCRT ``memset()``implementation. This is because, under the hood, ``RtlSecureZeroMemory()`` is implemented as follows, as ripped straight from WinNT.h:
+```c
+FORCEINLINE PVOID RtlSecureZeroMemory( _Out_writes_bytes_all_(cnt) PVOID ptr, _In_ SIZE_T cnt )
+{
+	volatile char *vptr = (volatile char *)ptr;
+	#if defined(_M_AMD64)
+		__stosb((PBYTE )((DWORD64)vptr), 0, cnt);
+	#else
+		while (cnt) {
+		#if !defined(_M_CEE) && (defined(_M_ARM) || defined(_M_ARM64))
+				__iso_volatile_store8(vptr, 0);
+		#else
+				*vptr = 0;
+		#endif
+			vptr++;
+			cnt--;
+		}
+	#endif // _M_AMD64
+	return ptr;
+}
+```
+
+As can be seen from the code, this function just calls ``__stosb()`` if AMD64 support is available, that is, if the code is being compiled for a 64 bit Windows system. All stosb does is generate a rep instruction which repeats storage of 0 values in memory for however many bytes the selected memory region is. This is obviously faster than a raw for loop, and it is fine for relatively small buffers, but after a certain point, it becomes obviously slower than the optimized implementation of ``memset()``, which uses vector instructions when possible and ensures memory alignment constraints.
+
+If the platform is not 64 bit, it performs a naive loop just like my simple, unoptimized and lazy freestanding implementatio, which will probably be optimized a little bit by the compiler, but it will remain a byte by byte zeroing operation because the pointer is marked volatile, so obviously slow as fuck compared to standard ``memset()`` implementation techniques.
+
+Meanwhile, Windows' UCRT default implementation of ``memset()`` is actually quite well optimized and has runtime CPU detection, which is what literally every single respectable C standard library implementation of ``memset()`` does in this day and age.
+
+This means that the trick of using a volatile pointer to the ``memset()`` function is actually faster for larger buffers. It just has the cost of a single pointer to a function dereference.
+
+Maybe with some buffer size heuristic, a decision could be made at runtime to choose between the two, but again, that's not worth it in my opinion because of all the other overhead that comes with Windows.h related fuckery.
 
 ## Linux/BSD bzero and explicit_bzero support:
 On Unix environments such as Linux and BSD, the presence of non-standard C functions such as ``bzero()`` and ``explicit_bzero()`` is entirely dependant on the standard library implementation that you are currently using.
@@ -93,5 +120,5 @@ The only viable path for assembly implementations would be to call memset in raw
 In the future, for the sake of performance, I will slowly add assembly specific implementations for known platforms for the freestanding variant and for ``memset()`` calls with memory barriers, but for now, the main implementation remains fully portable C.
 
 ## Summary:
-For now, this is the best I could come up with without overthinking too much.
+For now, this is the best I could come up with without overthinking too much. The ``memset()`` implementation on most C standard library implementations across Linux, BSD, Windows, etc, are all pretty good, and far better than any naive loop with a volatile pointer to the data, so the objective of my implementation is to try to not miss out on the great performance of standard ``memset()`` when trying to perform a secure memset call.
 
