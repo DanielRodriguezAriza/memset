@@ -119,6 +119,17 @@ The only viable path for assembly implementations would be to call memset in raw
 
 In the future, for the sake of performance, I will slowly add assembly specific implementations for known platforms for the freestanding variant and for ``memset()`` calls with memory barriers, but for now, the main implementation remains fully portable C.
 
+## Why a header only implementation?
+I could have separated this between a header and a source file, but my objective is to ensure that this works in all contexts without adding extra overheads in regular memset use cases.
+
+When we have separate header and source files, if we do not compile using LTO and we use separate translation units, then the compiler cannot inspect the internal implementation of each of these functions.
+
+This means that it cannot optimize away the calls, which is precisely what we want for the volatile memset calls. But we do not want to hinder regular memset calls.
+
+Another thing to have into account is that, an alternative design choice, could have been to have something as simple as a header file where we only declare the signature of a ``memset_explicit()`` function, and then on the source file add a simple raw call for ``memset()``, making it so that the assembly is as simple as a jump instruction. Keeping it in separate translation would be enough for the compiler to not be able to determine whether side effects exist or not on this function call, so it could not be optimized away. Obviously, this comes with the issue of making it so that anyone who compiles with LTO without being aware of this would end up having broken code that works but does not actually properly securely zero out memory, defeating entirely the purpose of this library.
+
+That is the reason for which this obvious approach was discarded. Because it would depend entirely on the build approach used by the user, and it would be more fitting of something like an engine or framework than something like a generic library meant for drop-in usage. This library's job is not to dictate how you build your project, so it makes the volatile function pointer compromise for the sake of making it possible to compile and preserve explicit safe memsetting even with -O3 and LTO.
+
 ## Summary:
 For now, this is the best I could come up with without overthinking too much. The ``memset()`` implementation on most C standard library implementations across Linux, BSD, Windows, etc, are all pretty good, and far better than any naive loop with a volatile pointer to the data, so the objective of my implementation is to try to not miss out on the great performance of standard ``memset()`` when trying to perform a secure memset call.
 
