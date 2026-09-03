@@ -130,6 +130,10 @@ Another thing to have into account is that, an alternative design choice, could 
 
 That is the reason for which this obvious approach was discarded. Because it would depend entirely on the build approach used by the user, and it would be more fitting of something like an engine or framework than something like a generic library meant for drop-in usage. This library's job is not to dictate how you build your project, so it makes the volatile function pointer compromise for the sake of making it possible to compile and preserve explicit safe memsetting even with -O3 and LTO.
 
+Another approach could be to have an empty function compiled within a separate translation unit and then invoking it as a call after a regular memset, making itso that the compiler cannot tell if there are side effects, so the ``memset()`` call cannot be optimized away, but this remains defeated by LTO.
+
+An alternative would be to use weak linkage, which would achieve the same effect as the volatile function pointer to ``memset()``, and with no issues from LTO, tho it will require compiler specific support for it to be supported, so this will be an alternative implementation that will come in the future, but it will not be the main implementation method. The volatile function pointer will remain as the primary fallback.
+
 ## Summary:
 For now, this is the best I could come up with without overthinking too much. The ``memset()`` implementation on most C standard library implementations across Linux, BSD, Windows, etc, are all pretty good, and far better than any naive loop with a volatile pointer to the data, so the objective of my implementation is to try to not miss out on the great performance of standard ``memset()`` when trying to perform a secure memset call.
 
