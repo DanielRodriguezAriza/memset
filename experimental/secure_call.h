@@ -29,12 +29,19 @@
 #define DRA_SECURE_CALL_WITH_ASSIGNMENT_TYPED(v, t, f, ...) DRA_SECURE_CALL_WITH_ASSIGNMENT_INTERNAL(__LINE__, (v), t, (&f), __VA_ARGS__)
 
 #if defined(__GNUC__) || defined(__clang__)
+	// NOTE : This call without a pointer actually allows some of the generated code to be more performant in some scenarios, but it does not seem to always work reliably, surprising to say the least!
+	// #define DRA_SAFE_CALL_BARRIER do { __asm__ __volatile__("" ::: "memory"); } while(0)
     #define DRA_SAFE_CALL_BARRIER(p) do { __asm__ __volatile__("" ::"r"(p): "memory"); } while(0)
 #else
     void safe_call_barrier_internal(void*) {}
     typedef void (*safe_call_barrier_t)(void*);
     volatile static safe_call_barrier_t safe_call_barrier_global = safe_call_barrier_internal;
     #define DRA_SAFE_CALL_BARRIER(p) safe_call_barrier_global(p)
+	// Another potential implementation of this would be using read write barrier on Win32, but that's been deprecated and no longer works properly...
+	// Another way of doing this is also just making a wrapper to a volatile load, something like:
+	// #define DRA_SAFE_CALL_BARRIER(p) do { uintXX_t value = (volatile uintXX_t *)(p); } while(0)
+	// Surprisingly, this preserves even calls that take place over full buffers such as memset, and it works on GCC and MSVC, but clang's optimizer is a bit smarter and optimizes this out into a single var read of whatever size uintXX_t is, so yeah, not a good thing for portability...
+	// The most portable approach remains the static volatile function pointer approach.
 #endif
 
 #ifndef DRA_SECURE_CALL_DO_NOT_ADD_PUBLIC_NAMES
