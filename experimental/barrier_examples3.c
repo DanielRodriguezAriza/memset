@@ -1,3 +1,4 @@
+// COMPILER EXPLORER URL: https://godbolt.org/z/16jjbaKKe
 // Fully working memset_explicit() custom implementation. Does not even need separate implementation file compiled and linked as a separate translation unit to fake the compiler optimization barrier. Which is good, because that can be very easily accidentally defeated just by using LTO, but this current implementation cannot be defeated so easily AFAIK.
 #include <string.h>
 #include <stddef.h>
