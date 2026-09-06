@@ -1,6 +1,10 @@
 #ifndef DRA_COMPILER_BARRIER_H
 #define DRA_COMPILER_BARRIER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* TODO: Clean up the code to make the customization interface a little bit less disgusting to my taste... */
 
 /*
@@ -104,5 +108,9 @@ void dra_barrier(void *p)
 	#error "No proper implementation of DRA_COMPILER_BARRIER could be found for the current system. This should never happen. Report this error to https://github.com/DanielRodriguezAriza/memset"
 #endif
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* DRA_COMPILER_BARRIER_H */
