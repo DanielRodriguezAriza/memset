@@ -1,6 +1,7 @@
 #ifndef DRA_COMPILER_BARRIER_H
 #define DRA_COMPILER_BARRIER_H
 
+/* TODO: Clean up the code to make the customization interface a little bit less disgusting to my taste... */
 
 /*
 	General purpose compiler memory barrier implementation.
@@ -8,17 +9,23 @@
 	This is a no-op, because it's just to signal to the compiler that it cannot assume certain properties about the memory access to a certain memory location, preventing certain optimizations from taking place. Useful to avoid DSE and DCE.
 */
 
+#ifdef DRA_COMPILER_BARRIER_FORCE_VFP
 
-#if defined(__clang__)
-	#define DRA_COMPILER_BARRIER_CLANG
-#elif defined(__GNUC__)
-	#define DRA_COMPILER_BARRIER_GNUC
-#elif (defined(_MSC_VER) && (defined(_WI32) || defined(_WIN64) || defined(WIN32) || defined(WIN64)))
-	#define DRA_COMPILER_BARRIER_MSVC
-#else
 	#define DRA_COMPILER_BARRIER_GENERIC
-#endif
 
+#else
+
+	#if defined(__clang__)
+		#define DRA_COMPILER_BARRIER_CLANG
+	#elif defined(__GNUC__)
+		#define DRA_COMPILER_BARRIER_GNUC
+	#elif (defined(_MSC_VER) && (defined(_WI32) || defined(_WIN64) || defined(WIN32) || defined(WIN64)))
+		#define DRA_COMPILER_BARRIER_MSVC
+	#else
+		#define DRA_COMPILER_BARRIER_GENERIC
+	#endif
+
+#endif
 
 /*
 	Usage of _ReadWriteBarrier() is no longer ideal because of its deprecation. Some users may prefer to not pollute their code with stuff like this.
