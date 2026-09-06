@@ -63,7 +63,7 @@ FORCEINLINE PVOID RtlSecureZeroMemory( _Out_writes_bytes_all_(cnt) PVOID ptr, _I
 
 As can be seen from the code, this function just calls ``__stosb()`` if AMD64 support is available, that is, if the code is being compiled for a 64 bit Windows system. All stosb does is generate a rep instruction which repeats storage of 0 values in memory for however many bytes the selected memory region is. This is obviously faster than a raw for loop, and it is fine for relatively small buffers, but after a certain point, it becomes obviously slower than the optimized implementation of ``memset()``, which uses vector instructions when possible and ensures memory alignment constraints.
 
-If the platform is not 64 bit, it performs a naive loop just like my simple, unoptimized and lazy freestanding implementatio, which will probably be optimized a little bit by the compiler, but it will remain a byte by byte zeroing operation because the pointer is marked volatile, so obviously slow as fuck compared to standard ``memset()`` implementation techniques.
+If the platform is not 64 bit, it performs a naive loop just like my simple, unoptimized and lazy freestanding implementation, which will probably be optimized a little bit by the compiler, but it will remain a byte by byte zeroing operation because the pointer is marked volatile, so obviously slow as fuck compared to standard ``memset()`` implementation techniques.
 
 Meanwhile, Windows' UCRT default implementation of ``memset()`` is actually quite well optimized and has runtime CPU detection, which is what literally every single respectable C standard library implementation of ``memset()`` does in this day and age.
 
