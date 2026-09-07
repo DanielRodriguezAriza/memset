@@ -23,7 +23,7 @@ The C standard added functions such as ``memset_explicit()`` and ``memset_s()`` 
 So, the purpose of this library is to offer a drop in replacement, because apparently the standard library has a solution, but everyone seems to refuse to actually implement it.
 
 
-# Notes regarding implementation details:
+# Notes regarding implementation details for safe memzero:
 Here are some notes and explanations regarding why I implemented things the way that I did.
 
 I know that people are very opinionated about how software should work, so I feel like I must justify why is it that I have not chosen a different path for many decisions on this library.
@@ -134,8 +134,82 @@ Another approach could be to have an empty function compiled within a separate t
 
 An alternative would be to use weak linkage, which would achieve the same effect as the volatile function pointer to ``memset()``, and with no issues from LTO, tho it will require compiler specific support for it to be supported, so this will be an alternative implementation that will come in the future, but it will not be the main implementation method. The volatile function pointer will remain as the primary fallback.
 
-## Summary:
-For now, this is the best I could come up with without overthinking too much. The ``memset()`` implementation on most C standard library implementations across Linux, BSD, Windows, etc, are all pretty good, and far better than any naive loop with a volatile pointer to the data, so the objective of my implementation is to try to not miss out on the great performance of standard ``memset()`` when trying to perform a secure memset call.
+# Notes regarding implementation details for compiler memory barriers:
+Here are some notes regarding the second part of this project, which are the different methods used to implement compiler memory barriers. The generic barrier.h header file defines a generic compiler memory barrier function which can be used as a memory fence to protect from the optimizer any group of instructions that we want. Basically, think of it as a ``DoNotOptimize()`` function aching to the one from Google Benchmark.
 
-It is sad that we have to incurr in the performance cost of a function pointer dereference rather than performing a raw ``memset()`` function call, but the C and C++ languages do not have any ways to signal to the compiler that you want a certain call to happen always for whatever purposes. The compiler is just too darn smart for its own good!
+Not to be confused with actual hardware barriers. We're talking about compiler level fences that are used to signal to the compiler that certain memory operations cannot be optimized away.
+
+These memory fences do not generate any actual instructions in the final code. They are no-ops, and thus, are only used as a way to signal to the compiler that certain memory operations take place that cannot be optimized away.
+
+Theoretically, this can be used to implement the ``memset_explicit()`` logic, tho I prefer to keep the implementations separate because of the many implementation details that make ``memzero_secure()`` such an interesting specific case, for instance, platform specific functionality that could be exploited to achieve our purposes.
+
+## Non standard compiler specific extensions and tricks
+On GCC and clang, we have access to GNU style volatile inline assembly. We can invoke ``__asm__ __volatile__("":::"memory")`` and it will indicate to the compiler that we are performing volatile memory operations on the current context, so no optimizations should take place.
+
+This works great for GCC, as it respects this instruction completely.
+
+Sadly, clang does not. When using max optimizations in clang, ``__asm__ __volatile__("":::"memory")`` is considered to ambiguous and is simply ignored, as it does not mark which specific memory region is it that we want to protect against the optimizer.
+
+Also, in the case of GCC, using ``__asm__ __volatile__("":::"memory")`` in raw can lead to worse performance than originally intended, as any memory access within the current scope can be considered volatile, so it is better to specify which memory region is it that we want to apply this instruction to.
+
+We can use things like:
+```c
+T *p = whatever();
+// Select one of these, each will be better depending on the platform.
+__asm__ __volatile__(""::"m"(*p):"memory")
+__asm__ __volatile__(""::"r"(p):"memory")
+__asm__ __volatile__(""::"g"(p):"memory")
+```
+Any of these will finally allow both clang, GCC, and any other compiler than implements properly GNU extensions to ensure that the memory operations performed over a given memory region will not be optimized away, achieving the compiler memory fence that we were looking for.
+
+After multiple tests, it seems to me like "m" works best for clang, and "r" works best for GCC. Many other alternatives exist, and the notation changes a bit if we also want to pass references, but for now, this is more than enough for my intents and purposes.
+
+In the case of MSVC, the best we can do is use ``_ReadWriteBarrier()``, which is the Microsoft equivalent to the GNU extension ``__asm__ __volatile__("":::"memory")`` call. Sadly, ``_ReadWriteBarrier()`` was deprecated, and in the last few versions of MSVC, there are many instances where this call alone has literally no effect whatsoever over the generated code, and instructions still remain optimized away, similar to the behaviour observed in clang.
+
+The best almost zero overhead workaround for an arbitrary function call protection barrier that I could find for MSVC is simply performing a volatime memory access to the desired memory, which tricks the compiler into thinking that the entire memory block could be accessed, thus, side effects cannot be optimized away:
+```c
+T *p = whatever();
+*(volatile char *)p;
+```
+
+This does generate an additional single byte memory read tho, so it is not entirely zero overhead, but it does not matter much. It is the small price to pay for tricking the compiler into not optimizing away a call that we care about. Sad that this has to happen, but it is what it is.
+
+In the case of GCC, this has a similar effect to MSVC, but having access to ``__asm__ __volatile__``, it makes no sense to want to pay an additional (although tiny) overhead that can be entirely skipped.
+
+In the case of clang, the optimizer is smart enough to see that, despite the memory read being marked as volatile, we're only reading a single byte, so it optimizes away whatever prior calls were made and simply memsets a single byte of the entire buffer, which is pretty funny, but useless for our intents and purposes.
+
+## standard C atomic_signal_fence and standard C++ std::atomic_signal_fence
+Both the C and C++ standards define the magical function ``atomic_signal_fence`` and ``std::atomic_signal_fence`` respectively. These are compiler memory fences, not to be confused with actual hardware fences, like the ones generated by ``atomic_thread_fence`` and ``std::atomic_thread_fence``.
+
+These memory fences do not generate any actual instructions in the final code. They are no-ops, and thus, are only used as a way to signal to the compiler that certain memory operations take place that cannot be optimized away.
+
+These fence functions take a ``memory_order``, which specifies how the fence should handle memory ordering of instructions when the compiler generates the final assembly code.
+
+Sadly, these fence functions are pretty much useless. For starters, they only work according to the standard under GCC. On clang, they can be trivially optimized away, and on MSVC, they are ignored on 90% of cases, just as ``_ReadWriteBarrier()`` is since its deprecation.
+
+This is because, under the hood, they are nothing more than the equivalent of ``__asm__ __volatile__("":::"memory")`` for both GCC and Clang, and ``_ReadWriteBarrier()`` for MSVC, so despite them being part of the standard, they add nothing.
+
+The built in ``__atomic_signal_fence()`` intrinsic for GCC and clang works exactly the same as the standard ones, so they can be invoked without having to include anything, so that could be seen as a plus, but the non standard ``__asm__ __volatile__`` extensions are just much more powerful and actually do what we want them to.
+
+Another problem of these functions is that they do not take a pointer to the specific buffer that we want to perform the fencing over. This means that, as we have already observed, calls such as ``__atomic_signal_fence(__ATOMIC_ACQ_REL)`` or ``atomic_signal_fence(memory_order_acq_rel)`` (same thing, one using GNU extensions, the other using the C standard), are pretty much just equivalent to ``__asm__ __volatile__("":::"memory")``, which as we already know, only works properly on GCC, and is easily optimized away and ignored by clang.
+
+Another issue is the fact that, even tho this is all part of C11, just like ``memset_explicit()``, many compilers just don't support it yet at all. In the case of the C++ version, it's C++23, and thus, almost noone supports it. MSVC requires compilation in ``/std:c++latest`` mode as of writing this, while both GCC and clang don't really need it because they updated their default compilation flags to be modern enough to support this by default. Not a big deal, but something to consider. Basically, you need some pretty modern standards to be able to compile code that uses these calls. On top of that, they are unreliable and sometimes just don't work at all. So, they are not worth it in my opinion.
+
+## Volatile function pointer trick
+Just as the memset volatile function pointer trick, we can do the same with an empty ``dummy()`` barrier function, which we'll call in place just after the function call that we want to protect from being optimized away, passing the corresponding memory address as an argument through a volatile function pointer to ``dummy()``.
+
+It has the exact same function pointer call overhead as described before on the ``memset()`` part of the README, so yeah. In any case, the dummy function is empty and does nothing. It's purpose is just to have a function call to generate a volatile pointer to and pass the protected memory region as an argument to trick the compiler into not being able to optimize away the corresponding call.
+
+This trick is the most standard out of them all, and the one that I would say is guaranteed to work pretty much on any compiler. The other tricks are compiler specific but allow us to get less overhead per call, so it is a good idea to have an implementation that does whatever compiler specific tricks, and then falls back to this.
+
+# Summary:
+For now, this is the best I could come up with without overthinking too much, or at least, without overthinking more than I already did.
+
+The ``memset()`` implementation on most C standard library implementations across Linux, BSD, Windows, etc, are all pretty good, and far better than any naive loop with a volatile pointer to the data, so the objective of my implementation is to try to not miss out on the great performance of standard ``memset()`` when trying to perform a secure memset call.
+
+This means that, for the compilers where there exist known compiler memory fences with proper results, we can easily exploit those to get a zero overhead implementation that prevents the ``memset()`` call from being optimized away. Or whatever corresponding function call you want to protect with the generic ``barrier()`` function I made on the barrier header.
+
+Sadly, for unknown compilers, the volatile function pointer to the corresponding function call is the best that I could come up with to get the most standards compliant and cross platform behaviour. It is sad that we have to incurr in the performance cost of a function pointer dereference rather than performing a raw function call, but the C and C++ languages do not have any ways to signal to the compiler that you want a certain call to happen always for whatever purposes.
+
+The compiler is just too darn smart for its own good! Except when it is just too darn stupid for our purposes!
 
