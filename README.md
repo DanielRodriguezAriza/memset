@@ -195,6 +195,95 @@ Another problem of these functions is that they do not take a pointer to the spe
 
 Another issue is the fact that, even tho this is all part of C11, just like ``memset_explicit()``, many compilers just don't support it yet at all. In the case of the C++ version, it's C++23, and thus, almost noone supports it. MSVC requires compilation in ``/std:c++latest`` mode as of writing this, while both GCC and clang don't really need it because they updated their default compilation flags to be modern enough to support this by default. Not a big deal, but something to consider. Basically, you need some pretty modern standards to be able to compile code that uses these calls. On top of that, they are unreliable and sometimes just don't work at all. So, they are not worth it in my opinion.
 
+Another issue with the standard ``atomic_signal_fence`` and ``std::atomic_signal_fence`` functions is how they are implemented so lazily in most standard library implementations.
+
+In the case of MSVC, it is laughable. We can look at the internal code of the function and see that it just ignores the memory order parameter entirely and ends up invoking ``_ReadWriteBarrier()`` under the hood, with a pragma to turn off the deprecation warning, because even tho Microsoft deprecated this function, they are aware of the fact that this is the only way to make it work, which is just too darn funny to me just because of the pure absurdity of the situation!
+
+If we look at the code within the standard C11 header stdatomic.h, we can see the following:
+```c
+// Copyright (c) Microsoft Corporation.
+#pragma once
+#ifdef __cplusplus
+#include <__msvc_cxx_stdatomic.hpp>
+#else
+#include <vcruntime_c11_stdatomic.h>
+#endif
+```
+
+Entering the C11 stdatomic.h header, we can see a very funny set of ``#error`` remarks:
+```c
+#ifdef __cplusplus
+// This header should never be included in C++ mode, C++ has it's own stdatomic.h
+#error "vcruntime_c11_stdatomic.h is a C-only header"
+#endif
+
+#ifdef __STDC_NO_ATOMICS__ 
+#error "C atomic support is not enabled"
+#endif
+
+#if __STDC_VERSION__ < 201112L
+#error "C atomics require C11 or later"
+#endif
+```
+
+So we have a redundant error as a "just in case" type of deal, which should never be triggered because including stdatomic.h includes the C++ version in the first place under the hood, so it's kinda pointless because this would never happen unless someone depends on the internal header structure of MSVC's library, which is obviously UB because it could be structured in any way.
+
+After that, we can see that ``atomic_signal_fence`` is defined as follows:
+```c
+#define atomic_signal_fence(_Order) _Atomic_signal_fence(_Order)
+```
+
+The internal ``_Atomic_signal_fence()`` function is defined as follows:
+```c
+inline void _Atomic_signal_fence(int _Order) {
+    if (_Order != _Atomic_memory_order_relaxed) {
+        _Compiler_barrier();
+    }
+}
+```
+As can be seen, the memory order is completely disregarded, except if it is memory order relaxed, in which case, obviously, the compiler does not generate any fences whatsoever.
+
+Internally, the ``_Compiler_barrier()`` macro is defined as:
+```c
+// this is different from the STL
+// we are the MSVC runtime so we need not support clang here
+#define _Compiler_barrier()                                                                   \
+    _Pragma("warning(push)") _Pragma("warning(disable : 4996)") /* was declared deprecated */ \
+        _ReadWriteBarrier() _Pragma("warning(pop)")
+
+// note: these macros are _not_ always safe to use with a trailing semicolon,
+// we avoid wrapping them in do {} while (0) because MSVC generates code for such loops
+// in debug mode.
+```
+
+Ignoring the extremely funny and absurd comments, just look at this piece of shit. It just pushes a pragma to ignore the deprecation warning for ``_ReadWriteBarrier()``, calls said intrinsic, and then enables the warnings again, and it does not consume the memory order parameter in any way. Completely absurd.
+
+If we follow the C++ ``<atomic>`` header instead, we will see that it follows the exact same path, but with some Microsoft C++ macros sprinkled on top.
+
+This is the definition of the C++ version of the ``atomic_signal_fence()`` function:
+```c
+_EXPORT_STD extern "C" inline void atomic_signal_fence(const memory_order _Order) noexcept {
+    if (_Order != memory_order_relaxed) {
+        _Compiler_barrier();
+    }
+}
+```
+
+And this is the definition for the ``_Compiler_barrier()`` macro:
+```c
+#define _Compiler_barrier() _STL_DISABLE_DEPRECATED_WARNING _ReadWriteBarrier() _STL_RESTORE_DEPRECATED_WARNING
+```
+
+As can be seen, both are almost identical to the C variant. Makes you wonder what exact differences are there that they could not manage to find a competent way to merge the both of them and conditionally add ``noexcept`` and ``extern "C"`` if compiling in C++ mode.
+
+As for GCC and clang, the internal implementation of both the C11 and C++23 versions of ``atomic_signal_fence()`` is almost equally absurd. Just as MSVC, they both ignore the memory ordering and do nothing about it. In the case of GCC, they even go as far as generating a fence even when using memory ordering relaxed, which is pretty funny. Under the hood, the both of them just default to calling ``__asm__ __volatile__("":::"memory")`` and call it a day, so it's about as useful as MSVC's implementation.
+
+In the case of GCC, that works, as we discussed before, but in the case of clang, it works just as well as in MSVC, that is, it doesn't work at all, because the optimizer can still see through that call, because no specific memory is designated to be affected by the inline assembly call.
+
+All in all, this should be more than enough evidence to explain why is it that I believe that the standard library's ``atomic_signal_fence()`` function is worthless. First, because of its design failure where it does not take a pointer to the memory, preventing a whole class of compiler memory fences from being implementable by compilers, and second, a total failure on the end of compiler implementers for just being so lazy that they just throw in the simplest possible fence under the hood, completely disregarding the memory ordering parameter and calling themselves "standards compliant", all while proudly patting themselves in the back for a job well done.
+
+As a final note, an empty ``__asm__ __volatile__`` block can also be useful to signal certain compilers to disable certain optimizations, specially if no input and output registers and memory locations are provided. The GNU ``asm`` syntax for inline assembly comes with the benefit that it can be integrated quite nicely into the optimizer, because the user can specify which registers and variables are affected by the ``asm`` call. Meanwhile, on MSVC, ``__asm`` blocks do not have this property. Thus, they cannot be optimized, because the compiler cannot inspect anything about them, and just has to purely insert the code there, while trusting that the programmer has written all of the glue code correctly, rather than being capable of generating good glue code itself. Back in the x86 days, an empty ``__asm{}`` block was enough to serve as a fence for certain operations on MSVC precisely because of this issue. But nowadays, this is not doable, because inline assembly is no longer available on MSVC, neither for AMD64 targets, x86_64, x64 and ARM. So, unless you're still programming purely x86 code, a raw and empty ``__asm{}`` block won't be useful for our usecase, mainly because it won't even compile.
+
 ## Volatile function pointer trick
 Just as the memset volatile function pointer trick, we can do the same with an empty ``dummy()`` barrier function, which we'll call in place just after the function call that we want to protect from being optimized away, passing the corresponding memory address as an argument through a volatile function pointer to ``dummy()``.
 
