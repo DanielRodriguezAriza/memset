@@ -258,7 +258,7 @@ Internally, the ``_Compiler_barrier()`` macro is defined as:
 
 Ignoring the extremely funny and absurd comments, just look at this piece of shit. It just pushes a pragma to ignore the deprecation warning for ``_ReadWriteBarrier()``, calls said intrinsic, and then enables the warnings again, and it does not consume the memory order parameter in any way. Completely absurd.
 
-If we follow the C++ ``<atomic>`` header instead, we will see that it follows the exact same path, but with some Microsoft C++ macros sprinkled on top.
+If we follow the C++ ``<atomic>`` header instead, we will see that it follows the exact same path, but with some Microsoft C++ specific macros sprinkled on top.
 
 This is the definition of the C++ version of the ``atomic_signal_fence()`` function:
 ```c
